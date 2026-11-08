@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Limpiador de CSV</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --text: #1d1d1f; --muted: #6e6e73;
+    --line: #e3e3e0; --accent: #2f6fde; --accent-text: #fff;
+    --warn-bg: #fff4dc; --warn-text: #8a5a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161618; --panel: #1f1f22; --text: #f2f2f2; --muted: #9a9aa0;
+      --line: #333338; --accent: #5b8ff0; --accent-text: #fff;
+      --warn-bg: #3a2e12; --warn-text: #f3c86a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .acciones { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  button, .boton {
+    font: inherit; font-weight: 600; border: 0; border-radius: 10px;
+    padding: 10px 18px; cursor: pointer; background: var(--accent); color: var(--accent-text);
+  }
+  button.secundario { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  input[type=file] { display: none; }
+  #nombre { color: var(--muted); }
+  #error { color: #d33; margin-top: 16px; }
+  .resumen {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin: 24px 0;
+  }
+  .dato { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .dato b { display: block; font-size: 26px; }
+  .dato span { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 17px; margin: 32px 0 10px; }
+  .tabla { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 13px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .marca {
+    display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 99px;
+    font-size: 12px; background: var(--warn-bg); color: var(--warn-text);
+  }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--accent); }
+  .oculto { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Limpiador de CSV</h1>
+  <p class="sub">Elegí un archivo y te muestro la lista sin productos repetidos por SKU.</p>
+
+  <div class="acciones">
+    <label class="boton" for="archivo">Elegir archivo CSV</label>
+    <input id="archivo" type="file" accept=".csv,text/csv">
+    <span id="nombre">Ningún archivo elegido</span>
+  </div>
+  <div id="error"></div>
+
+  <section id="resultado" class="oculto">
+    <div class="resumen">
+      <div class="dato"><b id="total"></b><span>filas en el archivo</span></div>
+      <div class="dato"><b id="unicos"></b><span>sin repetidos</span></div>
+      <div class="dato"><b id="sacadas"></b><span>filas repetidas sacadas</span></div>
+      <div class="dato"><b id="skusRep"></b><span>SKU que se repetían</span></div>
+    </div>
+
+    <div class="acciones">
+      <button id="descargar">Descargar CSV sin repetidos</button>
+    </div>
+
+    <h2>Listado sin repetidos</h2>
+    <div class="tabla"><table id="tablaUnicos"></table></div>
+
+    <div id="bloqueDup">
+      <h2>Qué estaba repetido</h2>
+      <div class="tabla"><table id="tablaDup"></table></div>
+    </div>
+
+    <p id="sinSku" class="sub"></p>
+  </section>
+</main>
+
+<!-- DEDUPE:INICIO (copia de dedupe.js; se actualiza con: node armar.js) -->
+<script>
+// Lógica compartida: la usan duplicados.js (terminal) e index.html (navegador).
+(function (raiz) {
+  function parseCSV(texto) {
+    const filas = [];
+    let fila = [], campo = "", comillas = false;
+    texto = texto.replace(/^﻿/, ""); // BOM de Excel
+    for (let i = 0; i < texto.length; i++) {
+      const c = texto[i];
+      if (comillas) {
+        if (c === '"' && texto[i + 1] === '"') { campo += '"'; i++; }
+        else if (c === '"') comillas = false;
+        else campo += c;
+      } else if (c === '"') comillas = true;
+      else if (c === ",") { fila.push(campo); campo = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && texto[i + 1] === "\n") i++;
+        fila.push(campo); filas.push(fila); fila = []; campo = "";
+      } else campo += c;
+    }
+    if (campo !== "" || fila.length) { fila.push(campo); filas.push(fila); }
+    return filas.filter((f) => f.some((v) => v.trim() !== ""));
+  }
+
+  const aCSV = (filas) =>
+    filas
+      .map((f) => f.map((v) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(","))
+      .join("\n") + "\n";
+
+  const normalizar = (sku) => (sku || "").trim().toUpperCase();
+
+  // Devuelve todo lo necesario para mostrar el resultado.
+  function analizar(texto, nombreColumna = "sku") {
+    const [encabezado = [], ...filas] = parseCSV(texto);
+    const nombre = nombreColumna.toLowerCase();
+    const col = encabezado.findIndex((h) => h.trim().toLowerCase() === nombre);
+    if (col < 0) {
+      throw new Error(`No encontré la columna "${nombreColumna}". Columnas: ${encabezado.join(", ")}`);
+    }
+
+    const grupos = new Map();
+    const sinSku = [];
+    const unicas = [];
+    filas.forEach((fila, i) => {
+      const linea = i + 2; // +1 encabezado, +1 porque las líneas arrancan en 1
+      const sku = normalizar(fila[col]);
+      if (!sku) { sinSku.push(linea); unicas.push(fila); return; }
+      if (!grupos.has(sku)) { grupos.set(sku, []); unicas.push(fila); }
+      grupos.get(sku).push({ linea, fila });
+    });
+
+    const duplicados = [...grupos]
+      .filter(([, v]) => v.length > 1)
+      .map(([sku, apariciones]) => ({ sku, apariciones }));
+
+    return { encabezado, col, filas, unicas, duplicados, sinSku };
+  }
+
+  const api = { parseCSV, aCSV, normalizar, analizar };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else raiz.Dedupe = api;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+</script>
+<!-- DEDUPE:FIN -->
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  let ultimo = null, nombreArchivo = "";
+
+  $("archivo").addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    nombreArchivo = f.name;
+    $("nombre").textContent = f.name;
+    $("error").textContent = "";
+    try {
+      ultimo = Dedupe.analizar(await f.text(), "sku");
+      mostrar(ultimo);
+    } catch (err) {
+      $("resultado").classList.add("oculto");
+      $("error").textContent = err.message;
+    }
+    e.target.value = ""; // permite volver a elegir el mismo archivo
+  });
+
+  function mostrar(r) {
+    const copias = new Map(r.duplicados.map((d) => [d.sku, d.apariciones.length]));
+    const sacadas = r.filas.length - r.unicas.length;
+
+    $("total").textContent = r.filas.length;
+    $("unicos").textContent = r.unicas.length;
+    $("sacadas").textContent = sacadas;
+    $("skusRep").textContent = r.duplicados.length;
+
+    const cabecera = "<tr>" + r.encabezado.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr>";
+
+    $("tablaUnicos").innerHTML = cabecera + r.unicas.map((fila) => {
+      const n = copias.get(Dedupe.normalizar(fila[r.col]));
+      return "<tr>" + r.encabezado.map((_, i) => {
+        const v = esc(fila[i] ?? "");
+        const marca = i === r.col && n ? `<span class="marca">estaba ${n} veces</span>` : "";
+        return `<td>${v}${marca}</td>`;
+      }).join("") + "</tr>";
+    }).join("");
+
+    $("bloqueDup").classList.toggle("oculto", !r.duplicados.length);
+    $("tablaDup").innerHTML =
+      "<tr><th>Línea</th>" + r.encabezado.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr>" +
+      r.duplicados.flatMap((d) => d.apariciones.map((a, k) =>
+        `<tr${k === 0 ? "" : ' style="opacity:.6"'}><td>${a.linea}${k === 0 ? " (se queda)" : ""}</td>` +
+        r.encabezado.map((_, i) => `<td>${esc(a.fila[i] ?? "")}</td>`).join("") + "</tr>"
+      )).join("");
+
+    $("sinSku").textContent = r.sinSku.length
+      ? `Ojo: hay filas sin SKU (líneas ${r.sinSku.join(", ")}). Las dejé en el listado.`
+      : "";
+
+    $("resultado").classList.remove("oculto");
+  }
+
+  $("descargar").addEventListener("click", () => {
+    if (!ultimo) return;
+    const blob = new Blob([Dedupe.aCSV([ultimo.encabezado, ...ultimo.unicas])], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = nombreArchivo.replace(/\.csv$/i, "") + "-sin-repetidos.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+</script>
+</body>
+</html>
